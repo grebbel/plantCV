@@ -1,0 +1,170 @@
+---
+title: "PlantCV"
+author: "Robert-Jan ten Hove"
+date: "3/12/2019"
+output: html_notebook
+---
+
+```{r}
+setwd("~/Documents/Workspace/Python/plantCV")
+library(reticulate)
+pcv <- import("plantcv")
+```
+
+```{python}
+import cv2
+from plantcv import plantcv as pcv
+
+def options():
+    parser = argparse.ArgumentParser(description="Imaging processing with opencv")
+    parser.add_argument("-i", "--image", help="Input image file.", required=True)
+    parser.add_argument("-o", "--outdir", help="Output directory for image files.", required=False)
+    parser.add_argument("-r","--result", help="result file.", required= False )
+    parser.add_argument("-w","--writeimg", help="write out images.", default=False, action="store_true")
+    parser.add_argument("-D", "--debug", help="can be set to 'print' or None (or 'plot' if in jupyter) prints intermediate images.", default=None)
+    args = parser.parse_args()
+    return args
+    
+pcv.params.debug = "plot"
+
+## plot image file (object 'img')
+img, path, img_filename = pcv.readimage("IMG_7602.JPG", "native")
+```
+
+```{python}
+## turn to greyscale
+## split image (h, s, or v channel)
+## channel - Split 'h' (hue), 's' (saturation), or 'v' (value) channel
+s_sat = pcv.rgb2gray_hsv(img, 's')
+```
+
+```{python}
+## Threshold the saturation image 
+# Used to help differentiate plant and background
+# threshold - Threshold value (0-255)
+# max_value - Value to apply above threshold (255 = white)
+# object_type - "light" or "dark" (default: "light"). If object is lighter than the background then standard thresholding is done. If object is darker than the background then inverse thresholding is done.
+s_thresh = pcv.threshold.binary(s_sat, 50, 255, 'light')
+```
+
+
+```{python}
+## Median Blur 
+# Used to reduce image noise
+# ksize - kernel size => integer or tuple, ksize x ksize box if integer, (n.m) size box if tuple
+s_mblur = pcv.median_blur(s_thresh, 20)
+# s_blur_11 = pcv.median_blur(s_thresh, (11, 11))
+```
+
+```{python}
+## Convert RGB to LAB and extract the Blue channel
+# Used to help differentiate plant and background
+# channel - Split 'l' (lightness), 'a' (green-magenta), or 'b' (blue-yellow) channel
+b = pcv.rgb2gray_lab(img, 'b')
+```
+
+```{python}
+## Threshold the blue image
+# Cie-L*ab is defined by lightness and the color-opponent dimensions a and b, which are based on the compressed Xyz color space coordinates.
+b_thresh = pcv.threshold.binary(b, 136, 255, 'light')
+b_cnt = pcv.threshold.binary(b, 136, 255, 'light')
+```
+```{python}
+## Join the thresholded saturation and blue-yellow images
+# Images must be the same size. 
+bs = pcv.logical_or(s_mblur, b_cnt)
+```
+
+```{python}
+## Apply Mask (for VIS images, mask_color=white)
+masked = pcv.apply_mask(img, bs, 'white')
+```
+
+```{python}
+# Convert RGB to LAB and extract the Green-Magenta and Blue-Yellow channels
+masked_a = pcv.rgb2gray_lab(masked, 'a')
+masked_b = pcv.rgb2gray_lab(masked, 'b')
+
+# Threshold the green-magenta and blue images
+maskeda_thresh = pcv.threshold.binary(masked_a, 115, 255, 'dark')
+maskeda_thresh1 = pcv.threshold.binary(masked_a, 135, 255, 'light')
+maskedb_thresh = pcv.threshold.binary(masked_b, 128, 255, 'light')
+
+# Join the thresholded saturation and blue-yellow images (OR)
+ab1 = pcv.logical_or(maskeda_thresh, maskedb_thresh)
+ab = pcv.logical_or(maskeda_thresh1, ab1)
+
+# Fill small objects
+ab_fill = pcv.fill(ab, 200)
+
+# Apply mask (for VIS images, mask_color=white)
+masked2 = pcv.apply_mask(masked, ab_fill, 'white')
+
+
+```
+
+```{python}
+# Identify objects
+id_objects, obj_hierarchy = pcv.find_objects(masked2, ab_fill)
+```
+
+```{python}
+# Define ROI
+roi1, roi_hierarchy= pcv.roi.rectangle(img=masked2, x=150, y=500, h=1970, w=1750)
+```
+
+```{python}
+# Decide which objects to keep
+roi_objects, hierarchy3, kept_mask, obj_area = pcv.roi_objects(img, 'partial', roi1, roi_hierarchy, id_objects, obj_hierarchy)
+```
+
+```{python}
+# Object combine kept objects
+obj, mask = pcv.object_composition(img, roi_objects, hierarchy3)
+```
+
+```{python}
+############### Analysis ################
+outfile=False
+if args.writeimg==True: outfile=args.outdir+"/"+filename
+
+# Find shape properties, output shape image (optional)
+shape_header, shape_data, shape_imgs = pcv.analyze_object(img, obj, mask)
+
+# Shape properties relative to user boundary line (optional)
+boundary_header, boundary_data, boundary_img1 = pcv.analyze_bound_horizontal(img, obj, mask, 1680)
+
+# Determine color properties: Histograms, Color Slices, output color analyzed histogram (optional)
+color_header, color_data, color_histogram = pcv.analyze_color(img, kept_mask, 256, 'all')
+
+# Pseudocolor the grayscale image
+pseudocolored_img = pcv.pseudocolor(gray_img=s, mask=kept_mask, cmap='jet')
+
+# Write shape and color data to results file
+pcv.print_results(filename=args.result)
+
+if __name__ == '__main__': 
+    main()
+
+
+```
+
+```{python}
+### Multi Plant Image Pipeline
+## Main pipeline
+def main():
+    # Get options
+    args = options()
+
+    # Read image
+img, path, img_filename = pcv.readimage(args.image)
+img, path, img_filename = pcv.readimage("IMG_76XX.JPG", "native")
+
+    pcv.params.debug=args.debug #set debug mode
+    
+```
+
+
+
+
+
